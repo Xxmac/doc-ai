@@ -6,6 +6,7 @@ from langchain.memory import ConversationBufferMemory
 from pydantic import BaseModel
 import uvicorn
 import os
+from sqlalchemy import create_engine, text
 
 app = FastAPI()
 
@@ -16,9 +17,13 @@ DB_HOST = "127.0.0.1:5432"
 DB_NAME = "hospital"
 DATABASE_URI = f"postgresql+psycopg2://{DB_USER}:{DB_PASS}@{DB_HOST}/{DB_NAME}"
 
+# SQLAlchemy engine for direct queries
+engine = create_engine(DATABASE_URI)
+
 # LangChain components
 db = SQLDatabase.from_uri(DATABASE_URI)
-llm = ChatOpenAI(temperature=0, model="gpt-4o-mini", openai_api_key="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")  # shorten key for safety
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+llm = ChatOpenAI(temperature=0, model="gpt-4o-mini", openai_api_key=OPENAI_API_KEY)
 memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
 
 # Setup SQLDatabaseChain (NO memory here!)
@@ -66,6 +71,24 @@ async def ask(request: QueryRequest):
         "response": cleaned_output["result"],
         "sql_query": cleaned_output.get("intermediate_steps", [""])[-1]
     }
+
+# Endpoint to fetch appointment schedule
+@app.get("/appointments")
+def get_appointments():
+    query = text(
+        """
+        SELECT a.id as appointment_id, a.patient_name, a.time_slot, a.status,
+               d.name as doctor_name, d.is_available, dep.name as department_name
+        FROM doctors d
+        LEFT JOIN departments dep ON d.department_id = dep.id
+        LEFT JOIN appointments a ON a.doctor_id = d.id
+        ORDER BY a.time_slot
+        """
+    )
+    with engine.connect() as conn:
+        result = conn.execute(query)
+        rows = result.mappings().all()
+    return [dict(row) for row in rows]
 
 # Run server
 if __name__ == "__main__":
